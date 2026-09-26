@@ -158,11 +158,11 @@ class Decision:
 
 
 class BudgetAwareToolRouter:
-    """Select tools by optimistic pass rate per conservative unit cost.
+    """Score tools by optimistic pass rate discounted by resource use.
 
     Selection policy::
 
-        argmax_a PassUCB(query, a) / max(CostLCB(a), epsilon)
+        PassUCB(query, a) / (1 + normalized resource estimate)
 
     subject to ``CostUCB <= remaining_budget`` and, when supplied,
     ``LatencyUCB <= latency_sla``.
@@ -354,7 +354,10 @@ class BudgetAwareToolRouter:
                 self.cost_weight * cost_lcb / self.cost_scale
                 + self.latency_weight * latency_lcb / self.latency_scale
             )
-            score = pass_ucb / max(resource_lcb, self.epsilon)
+            # The +1 regularizes free and cold-start tools. Without it, a
+            # zero resource estimate divides by epsilon and produces scores
+            # in the tens of millions, even though pass_ucb is in [0, 1].
+            score = pass_ucb / (1.0 + resource_lcb)
             score -= self.latency_penalty * latency_ucb
             decisions.append(
                 Decision(

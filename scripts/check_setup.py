@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import argparse
 import importlib
 import os
-from pathlib import Path
 import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -21,16 +19,11 @@ def result(ok: bool, label: str, detail: str) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate ToolBandit before startup")
-    parser.add_argument("--registry", default=os.getenv(
-        "TOOL_REGISTRY_PATH", str(PROJECT_ROOT / "data" / "tool_registry.sqlite3")
-    ))
-    args = parser.parse_args()
     failures = 0
 
     version_ok = sys.version_info >= (3, 11)
     failures += result(version_ok, "Python", sys.version.split()[0] + " (need >=3.11)")
-    for package in ("numpy", "fastapi", "uvicorn", "pydantic"):
+    for package in ("numpy", "fastapi", "uvicorn", "pydantic", "psycopg"):
         try:
             module = importlib.import_module(package)
             failures += result(True, package, getattr(module, "__version__", "installed"))
@@ -42,10 +35,10 @@ def main() -> int:
         note = "set" if present else "missing"
         failures += result(present, name, note)
 
-    path = Path(args.registry).expanduser().resolve()
+    database_url = os.getenv("DATABASE_URL")
     try:
-        registry = ToolRegistry(path)
-        failures += result(True, "Tool registry", "{} tools in {}".format(registry.count(), path))
+        registry = ToolRegistry(database_url or "")
+        failures += result(True, "Tool registry", "{} tools in PostgreSQL".format(registry.count()))
         failures += result(True, "Enabled tools", str(registry.count(enabled_only=True)))
     except Exception as error:
         failures += result(False, "Tool registry", str(error))

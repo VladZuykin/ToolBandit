@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -52,7 +53,7 @@ def main() -> None:
         print("      {:2d}. {}".format(number, example.adapter.tool_name))
 
     print("\n[2/6] EMBEDDINGS: embedding tool descriptions with text-embedding-ada-002 ...", flush=True)
-    encoder = Ada002Encoder(ROOT / "data" / "ada002_showcase_cache.sqlite3", output_dimension=1536)
+    encoder = Ada002Encoder(os.environ.get("DATABASE_URL"), output_dimension=1536)
     documents = []
     for example in examples:
         adapter = example.adapter

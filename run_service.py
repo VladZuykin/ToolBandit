@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from budget_tool_router.ada_embeddings import Ada002Encoder
 from budget_tool_router import (
@@ -12,10 +11,6 @@ from budget_tool_router import (
 )
 from budget_tool_router.registry import ToolRegistry, definition_assets
 from budget_tool_router.service import serve
-
-ROOT = Path(__file__).resolve().parent
-CACHE = ROOT / "data" / "ada002_embeddings_1536.sqlite3"
-
 
 def covariance_mode() -> tuple[str, bool]:
     mode = os.getenv("TOOLBANDIT_COVARIANCE", "diagonal").strip().lower()
@@ -29,16 +24,16 @@ def main() -> None:
         raise SystemExit(
             "DEEPSEEK_API_KEY is required: ToolBandit needs Judge feedback to train LinUCB"
         )
-    registry_path = Path(os.getenv(
-        "TOOL_REGISTRY_PATH", str(ROOT / "data" / "tool_registry.sqlite3")
-    )).expanduser().resolve()
-    registry = ToolRegistry(registry_path)
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        raise SystemExit("DATABASE_URL is required (PostgreSQL)")
+    registry = ToolRegistry(database_url)
     active_definitions = registry.list(limit=100_000, enabled=True)
     assets = [definition_assets(item) for item in active_definitions]
     documents = [item[0] for item in assets]
     specs = [item[1] for item in assets]
 
-    encoder = Ada002Encoder(CACHE, output_dimension=1536)
+    encoder = Ada002Encoder(database_url, output_dimension=1536)
     retriever = SemanticToolRetriever(encoder, documents)
     covariance, diagonal_covariance = covariance_mode()
     router = BudgetAwareToolRouter(
@@ -49,7 +44,7 @@ def main() -> None:
     )
     judge = DeepSeekJudge()
     service = ToolRoutingService(retriever, router, judge, registry=registry)
-    print(f"Tool registry: {registry.path} ({registry.count()} total, {len(specs)} enabled)")
+    print(f"Tool registry: {registry.location} ({registry.count()} total, {len(specs)} enabled)")
     print(f"LinUCB covariance: {covariance}")
     serve(service, host=os.getenv("TOOLBANDIT_HOST", "127.0.0.1"),
           port=int(os.getenv("TOOLBANDIT_PORT", "8080")))

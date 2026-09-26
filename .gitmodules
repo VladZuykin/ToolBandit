@@ -1,0 +1,3 @@
+[submodule "external/StableToolBenchQoS"]
+	path = external/StableToolBenchQoS
+	url = https://github.com/VladZuykin/StableToolBenchQoS.git

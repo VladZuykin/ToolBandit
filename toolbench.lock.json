@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/VladZuykin/StableToolBenchQoS.git",
+  "path": "external/StableToolBenchQoS",
+  "commit": "aa4ed9f4737ad98bd706663f01d63623c3427812",
+  "python": "3.11",
+  "biasbusters_dataset": {
+    "filename": "toolbench_bias_queries.json",
+    "sha256": "3ee9a1fc176822187def385dd39ecedbac0af66cca2b7eeff7bb74190ba345ce",
+    "records": 5000
+  }
+}

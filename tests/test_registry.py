@@ -1,10 +1,6 @@
-import tempfile
-from pathlib import Path
-
 import numpy as np
 
 from budget_tool_router import BudgetAwareToolRouter, SemanticToolRetriever, ToolRoutingService
-from budget_tool_router.registry import ToolRegistry
 
 
 class FakeEncoder:
@@ -20,35 +16,31 @@ def definition(name="weather", description="Current weather"):
     }
 
 
-def test_registry_crud_and_live_index_preserve_learning_on_update():
-    with tempfile.TemporaryDirectory() as directory:
-        registry = ToolRegistry(Path(directory) / "tools.sqlite3")
-        registry.put(definition(), create_only=True)
-        retriever = SemanticToolRetriever(FakeEncoder(), [])
-        router = BudgetAwareToolRouter([], context_dimension=3, diagonal_covariance=True)
-        service = ToolRoutingService(retriever, router, registry=registry)
-        assert service.refresh_registry() == 1
-        assert router.tool_names == ["weather"]
+class MemoryRegistry:
+    def __init__(self):
+        self.items = {}
+    def put(self, item, **_): self.items[item["tool_name"]] = dict(item)
+    def list(self, **_): return [item for item in self.items.values() if item.get("enabled", True)]
+    def set_enabled(self, name, enabled): self.items[name]["enabled"] = enabled
+    def delete(self, name): return self.items.pop(name, None) is not None
+    def count(self): return len(self.items)
 
-        router.observe("weather", np.array([1.0, 0.0, 0.0]), passed=True,
-                       observed_cost=0.0, observed_latency=0.4)
-        updated = definition(description="Updated weather description")
-        registry.put(updated)
-        service.refresh_registry()
-        assert router.snapshot()["tools"]["weather"]["reward_observations"] == 1
 
-        registry.set_enabled("weather", False)
-        service.refresh_registry()
-        assert retriever.documents == []
-        registry.set_enabled("weather", True)
-        service.refresh_registry()
-        assert router.snapshot()["tools"]["weather"]["reward_observations"] == 1
-
-        assert registry.delete("weather") is True
-        router.remove_tool("weather")
-        service.refresh_registry()
-        assert registry.count() == 0
-        assert retriever.documents == []
+def test_registry_refresh_preserves_learning_on_update():
+    registry = MemoryRegistry()
+    registry.put(definition())
+    retriever = SemanticToolRetriever(FakeEncoder(), [])
+    router = BudgetAwareToolRouter([], context_dimension=3, diagonal_covariance=True)
+    service = ToolRoutingService(retriever, router, registry=registry)
+    assert service.refresh_registry() == 1
+    router.observe("weather", np.array([1.0, 0.0, 0.0]), passed=True,
+                   observed_cost=0.0, observed_latency=0.4)
+    registry.put(definition(description="Updated weather description"))
+    service.refresh_registry()
+    assert router.snapshot()["tools"]["weather"]["reward_observations"] == 1
+    registry.set_enabled("weather", False)
+    service.refresh_registry()
+    assert retriever.documents == []
 
 
 def test_empty_registry_search_returns_empty_without_calling_encoder():

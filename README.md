@@ -9,8 +9,8 @@ ToolBandit — HTTP-сервис для семантического поиск�
 - сервис **не вызывает зарегистрированные инструменты**: он возвращает релевантный список, а вызов выполняет агент или внешний оркестратор;
 - порядок `tools` определяет semantic retriever; LinUCB только добавляет `ucb_score` и **не меняет порядок**;
 - аутентификация, авторизация, rate limiting и TLS не встроены — не публикуйте Uvicorn напрямую в интернет;
-- определения инструментов сохраняются в SQLite, но состояние LinUCB, `request_id` и задания Judge пока находятся в памяти и теряются после рестарта;
-- SQLite рассчитан на один экземпляр сервиса; для нескольких реплик потребуется общее хранилище и синхронизация состояния;
+- определения инструментов и cache embeddings сохраняются в PostgreSQL, но состояние LinUCB, `request_id` и задания Judge пока находятся в памяти и теряются после рестарта;
+- несколько API-реплик могут использовать одну БД, но до вынесения состояния LinUCB в общее хранилище их модели будут обучаться независимо;
 - `cost` обязателен при регистрации; необязательная `latency` автоматически обучается по реальным вызовам;
 - OpenAI Embeddings и DeepSeek Judge являются внешними платными сервисами со своими тарифами, лимитами и политиками данных;
 - лицензия проекта — Apache-2.0: см. раздел [«Лицензия»](#лицензия).
@@ -47,7 +47,7 @@ python -m pip install -r requirements.txt
 ```bash
 export OPENAI_API_KEY="..."
 export DEEPSEEK_API_KEY="..."
-export TOOL_REGISTRY_PATH="$PWD/data/tool_registry.sqlite3"
+export DATABASE_URL="postgresql://toolbandit:password@127.0.0.1:5432/toolbandit"
 export TOOLBANDIT_HOST="127.0.0.1"
 export TOOLBANDIT_PORT="8080"
 export TOOLBANDIT_COVARIANCE="diagonal"
@@ -58,12 +58,24 @@ export TOOLBANDIT_COVARIANCE="diagonal"
 | `OPENAI_API_KEY` | для новых embeddings | Кодирование запросов и инструментов | отсутствует |
 | `DEEPSEEK_API_KEY` | да | Асинхронный LLM Judge и reward для LinUCB | отсутствует |
 | `DEEPSEEK_JUDGE_MODEL` | нет | Модель Judge | `deepseek-flash` |
-| `TOOL_REGISTRY_PATH` | нет | SQLite registry | `data/tool_registry.sqlite3` |
+| `DATABASE_URL` | да | PostgreSQL для registry и cache embeddings | отсутствует |
 | `TOOLBANDIT_HOST` | нет | Адрес Uvicorn | `127.0.0.1` |
 | `TOOLBANDIT_PORT` | нет | Порт Uvicorn | `8080` |
 | `TOOLBANDIT_COVARIANCE` | нет | `diagonal` или `full` | `diagonal` |
 | `TOOL_COST_SCALE` | нет | Масштаб cost в UCB score | `0.012` |
 | `TOOL_LATENCY_SCALE` | нет | Масштаб latency в UCB score | `3.0` |
+
+### Docker Compose
+
+```bash
+cp .env.example .env
+# заполните POSTGRES_PASSWORD, OPENAI_API_KEY и DEEPSEEK_API_KEY
+docker compose up --build -d
+docker compose ps
+curl -s http://127.0.0.1:8080/health | python -m json.tool
+```
+
+Новый PostgreSQL volume и новый сервис стартуют с пустым каталогом. Инструменты добавляются через API после запуска. Остановка без удаления данных: `docker compose down`. Полное удаление БД: `docker compose down -v`.
 
 ### Проверка и запуск
 

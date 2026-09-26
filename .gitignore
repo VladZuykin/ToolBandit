@@ -21,12 +21,8 @@ env/
 *.key
 *.pem
 
-# Runtime state and caches
-data/*.sqlite3
-data/*.sqlite3-*
-*.sqlite3-journal
-*.sqlite3-wal
-*.sqlite3-shm
+# Generated benchmark output
+data/
 *.log
 logs/
 
@@ -49,4 +45,8 @@ dist/
 Thumbs.db
 desktop.ini
 
+
+
+# Separate StableToolBench environments
+.venv-toolbench*/
 

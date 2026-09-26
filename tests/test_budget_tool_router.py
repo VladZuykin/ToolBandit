@@ -86,6 +86,16 @@ class BudgetAwareToolRouterTests(unittest.TestCase):
         self.assertEqual(decision.tool_name, "unknown")
         self.assertEqual(decision.cost_ucb, 0.002)
 
+    def test_free_tool_with_unknown_latency_has_bounded_score(self) -> None:
+        router = BudgetAwareToolRouter(
+            [ToolSpec("free", 0.0, None, prior_count=1)],
+            alpha=0.35, cost_weight=0.5, latency_weight=0.5,
+            cost_scale=0.012, latency_scale=3.0,
+        )
+        decision = router.select(context(0), remaining_budget=1.0, latency_sla=5.0)
+        self.assertGreaterEqual(decision.score, 0.0)
+        self.assertLessEqual(decision.score, 1.0)
+
     def test_greedy_fallback_uses_distinct_tools(self) -> None:
         router = self.make_router()
         calls = []

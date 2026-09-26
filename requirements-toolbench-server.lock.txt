@@ -1,0 +1,11 @@
+# Direct dependencies used by external/StableToolBenchQoS/server.
+# Kept separate because StableToolBench requires Pydantic 1 while ToolBandit uses
+# a current FastAPI environment.
+fastapi==0.110.0
+openai==1.30.5
+pydantic==1.10.11
+PyYAML==6.0.1
+requests==2.31.0
+slowapi==0.1.9
+tenacity==8.2.2
+uvicorn==0.28.0

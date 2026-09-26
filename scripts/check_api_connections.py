@@ -5,16 +5,14 @@ from __future__ import annotations
 import json
 import os
 import sys
-import tempfile
 import time
-from pathlib import Path
 import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from budget_tool_router.ada_embeddings import Ada002Encoder
+from budget_tool_router.ada_embeddings import Ada002Encoder, MemoryEmbeddingCache
 from budget_tool_router import DeepSeekJudge
 
 
@@ -26,11 +24,10 @@ def main() -> int:
         failures += 1
     else:
         try:
-            with tempfile.TemporaryDirectory() as directory:
-                encoder = Ada002Encoder(Path(directory) / "connection-test.sqlite3")
-                started = time.perf_counter()
-                vector = encoder.encode_many(["ToolBandit API connection test"])[0]
-                elapsed = time.perf_counter() - started
+            encoder = Ada002Encoder(cache=MemoryEmbeddingCache())
+            started = time.perf_counter()
+            vector = encoder.encode_many(["ToolBandit API connection test"])[0]
+            elapsed = time.perf_counter() - started
             print("      OK: model={}, dimension={}, latency={:.3f}s".format(
                 encoder.model, len(vector), elapsed))
         except Exception as error:
