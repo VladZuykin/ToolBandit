@@ -1,33 +1,31 @@
 # ToolBandit
 
-ToolBandit — HTTP-сервис для семантического поиска инструментов, проверки их по бюджету и SLA, добавления контекстного `ucb_score` и обучения по отложенной оценке результата.
+ToolBandit — HTTP-сервис для семантического поиска инструментов, проверки их по бюджету и SLA, добавления контекстного **ucb_score** и обучения с отложенной оценкой результата моделью-оценщиком.
 
-## Сначала прочитайте ограничения
+## О чем сервис
 
-Текущая версия подходит для разработки, экспериментов и запуска одним процессом. Перед публичным production-развёртыванием учитывайте следующее:
+Учитывайте следующее:
 
-- сервис **не вызывает зарегистрированные инструменты**: он возвращает релевантный список, а вызов выполняет агент или внешний оркестратор;
-- порядок `tools` определяет semantic retriever; LinUCB только добавляет `ucb_score` и **не меняет порядок**;
-- аутентификация, авторизация, rate limiting и TLS не встроены — не публикуйте Uvicorn напрямую в интернет;
-- определения инструментов и cache embeddings сохраняются в PostgreSQL, но состояние LinUCB, `request_id` и задания Judge пока находятся в памяти и теряются после рестарта;
-- несколько API-реплик могут использовать одну БД, но до вынесения состояния LinUCB в общее хранилище их модели будут обучаться независимо;
-- `cost` обязателен при регистрации; необязательная `latency` автоматически обучается по реальным вызовам;
-- OpenAI Embeddings и DeepSeek Judge являются внешними платными сервисами со своими тарифами, лимитами и политиками данных;
-- лицензия проекта — Apache-2.0: см. раздел [«Лицензия»](#лицензия).
+- сервис **не вызывает инструменты**: он возвращает релевантный список, дополняя своим скором, а вызов выполняет агент, после чего ему нужно получить от него обратно актуальный latency и cost;
+- порядок **tools** определяет semantic retriever; LinUCB только добавляет **ucb_score** и **не меняет порядок**;
+- определения инструментов и cache embeddings сохраняются в PostgreSQL, но состояние LinUCB, request_id и задания Judge находятся в памяти и теряются после рестарта;
+- **cost** обязателен при регистрации; необязательная **latency** автоматически обучается по реальным вызовам;
+- используются модели для эмбеддинга от OpenAI (text-embedding-ada-002) и DeepSeek (по умолчанию deepseek-flash) в качестве оценщика;
+- лицензия проекта — Apache-2.0.
 
 ## Быстрый старт
 
 ### Требования и установка
 
-- Python `3.11` (проверенная версия указана в `python_version.txt`);
-- ключ OpenAI для новых embeddings;
-- ключ DeepSeek обязателен: Judge превращает результат инструмента в reward для LinUCB.
+- Python 3.11;
+- ключ OpenAI для эмбеддингов;
+- ключ DeepSeek для модели-судьи.
 
 Git Bash в Windows:
 
 ```bash
 cd ~/Desktop/ToolBandit
-/c/Users/Vladp/anaconda3/python.exe -m venv venv
+python.exe -m venv venv
 source venv/Scripts/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
@@ -36,7 +34,7 @@ python -m pip install -r requirements.txt
 Linux/macOS:
 
 ```bash
-python3.11 -m venv venv
+python3 -m venv venv
 source venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
@@ -55,9 +53,9 @@ export TOOLBANDIT_COVARIANCE="diagonal"
 
 | Переменная | Обязательна | Назначение | По умолчанию |
 |---|---:|---|---|
-| `OPENAI_API_KEY` | для новых embeddings | Кодирование запросов и инструментов | отсутствует |
-| `DEEPSEEK_API_KEY` | да | Асинхронный LLM Judge и reward для LinUCB | отсутствует |
-| `DEEPSEEK_JUDGE_MODEL` | нет | Модель Judge | `deepseek-flash` |
+| `OPENAI_API_KEY` | для новых эмбеддингов (не из кеша) | Кодирование запросов и инструментов | отсутствует |
+| `DEEPSEEK_API_KEY` | да | Для модели-судьи | отсутствует |
+| `DEEPSEEK_JUDGE_MODEL` | нет | Модель-судья | `deepseek-flash` |
 | `DATABASE_URL` | да | PostgreSQL для registry и cache embeddings | отсутствует |
 | `TOOLBANDIT_HOST` | нет | Адрес Uvicorn | `127.0.0.1` |
 | `TOOLBANDIT_PORT` | нет | Порт Uvicorn | `8080` |
@@ -69,7 +67,7 @@ export TOOLBANDIT_COVARIANCE="diagonal"
 
 ```bash
 cp .env.example .env
-# заполните POSTGRES_PASSWORD, OPENAI_API_KEY и DEEPSEEK_API_KEY
+# перед этим нужно заполнить POSTGRES_PASSWORD, OPENAI_API_KEY и DEEPSEEK_API_KEY
 docker compose up --build -d
 docker compose ps
 curl -s http://127.0.0.1:8080/health | python -m json.tool
@@ -119,9 +117,9 @@ curl -s -X POST http://127.0.0.1:8080/v1/tools \
   }' | python -m json.tool
 ```
 
-`input_schema` и `output_schema` используют структуру [JSON Schema](https://json-schema.org/learn/getting-started-step-by-step). Сервис сохраняет схемы как метаданные и включает их в semantic document, но пока не валидирует реальный tool call по этим схемам.
+`input_schema` и `output_schema` используют JSON Schema. Сервис сохраняет схемы как метаданные и включает их в semantic document, но пока не валидирует реальный tool call по этим схемам.
 
-### Найти инструменты
+### Retriever
 
 ```bash
 curl -s -X POST http://127.0.0.1:8080/v1/tools/search \
@@ -136,7 +134,7 @@ curl -s -X POST http://127.0.0.1:8080/v1/tools/search \
   }' | python -m json.tool
 ```
 
-Сокращённый ответ:
+Ответ:
 
 ```json
 {
@@ -155,8 +153,6 @@ curl -s -X POST http://127.0.0.1:8080/v1/tools/search \
 }
 ```
 
-Сервис намеренно не возвращает `recommended_tool`: выбор и вызов остаются ответственностью агента. Он также не раскрывает внутренние `estimated_cost`, `estimated_latency` и остаток бюджета.
-
 ## Как это работает
 
 ```text
@@ -174,22 +170,22 @@ Semantic retrieval по описаниям и JSON Schema
         ↓
 DeepSeek Judge асинхронно оценивает результат
         ↓
-LinUCB получает бинарный reward и обновляет модель инструмента
+LinUCB получает бинарный reward (успешность использования) и обновляет модель инструмента
 ```
 
 ### Semantic retriever
 
-Retriever кодирует запрос и описание каждого инструмента с помощью embeddings, нормализует векторы и считает cosine similarity. Подробнее: [OpenAI Embeddings](https://platform.openai.com/docs/guides/embeddings).
+Retriever кодирует запрос и описание каждого инструмента с помощью [text-embedding-ada-002](https://platform.openai.com/docs/guides/embeddings), нормализует векторы и считает cosine similarity.
 
-- `retrieval_score` — cosine similarity запроса и semantic document;
-- `retrieval_rank` — исходная позиция retriever;
-- порядок массива `tools` сохраняет semantic ranking после удаления infeasible-инструментов.
+- retrieval_score — cosine similarity запроса и semantic document;
+- retrieval_rank — исходная позиция retriever;
+- порядок массива tools сохраняет semantic ranking, но добавляет score.
 
 ### LinUCB
 
-[LinUCB](https://arxiv.org/abs/1003.0146) — contextual bandit: модель связывает embedding контекста с reward конкретного инструмента. Используется disjoint-модель — у каждого инструмента собственные параметры.
+[LinUCB](https://arxiv.org/abs/1003.0146) — contextual bandit: модель связывает embedding контекста с reward конкретной LLM. Используется disjoint-модель — для каждой LLM собственные параметры. Отсюда черпается идея, но мы работаем с инструментами.
 
-В сервисе применяется diagonal approximation: вместо полной матрицы `1536 × 1536` для каждого инструмента хранится диагональ. Это уменьшает память и вычисления, но не моделирует взаимодействия между координатами embedding.
+В сервисе применяется diagonal approximation: вместо полной матрицы **1536 × 1536** для каждого инструмента хранится диагональ. Это уменьшает память и вычисления, но не моделирует взаимодействия между координатами embedding.
 
 Режим выбирается перед запуском:
 
@@ -201,9 +197,9 @@ export TOOLBANDIT_COVARIANCE="diagonal"
 export TOOLBANDIT_COVARIANCE="full"
 ```
 
-При `d=1536` full-модель хранит примерно 18 MiB только для `A⁻¹` каждого инструмента; 50 инструментов требуют около 900 MiB без учёта остальных данных. Текущий режим отображается в `GET /health` как поле `covariance`.
+При **d=1536** full-модель хранит примерно 18 MiB только для A⁻¹ каждого инструмента; 50 инструментов требуют около 900 MiB без учёта остальных данных. Текущий режим отображается в GET /health в поле **covariance**.
 
-`ucb_score` дополнительно учитывает внутренние оценки cost и latency. Он показывается агенту для диагностики, но не переставляет результаты retriever.
+**ucb_score** дополнительно учитывает внутренние оценки cost и latency.
 
 ### Бюджет и latency SLA
 
@@ -216,28 +212,24 @@ estimated_latency <= latency_sla
 
 Источник оценки:
 
-1. исходный `cost` и необязательная `latency` из registry;
-2. фактические `observed_cost` и `observed_latency` реальных вызовов;
+1. исходный cost и необязательная latency из registry (в начале);
+2. фактические observed_cost и observed_latency реальных вызовов;
 3. после каждого вызова средние обновляются автоматически, независимо от результата Judge.
 
-Если начальная `latency` не задана, первый вызов считается cold start и не отклоняется из-за неизвестной задержки. После него сервис использует измеренную `observed_latency`.
+Если изначально с добавлением инструмента **latency** не задана, первый вызов считается cold start и не отклоняется из-за неизвестной задержки. После этого сервис использует измеренную **observed_latency**.
 
-### DeepSeek Judge и delayed feedback
+### DeepSeek в качестве судьи и delayed feedback
 
-Judge получает намерение, ожидаемый контракт и `tool_output`, затем возвращает:
+Judge получает намерение, ожидаемый контракт и **tool_output**, затем возвращает:
 
-- `pass` — требования выполнены, reward `1`;
-- `partial` — частичный результат, reward `0`;
-- `fail` — результат непригоден, reward `0`;
-- `uncertain` — недостаточно уверенности, LinUCB не обновляется.
-
-`tool_output` считается недоверенными данными: Judge не должен выполнять инструкции из ответа инструмента. См. [DeepSeek API](https://api-docs.deepseek.com/).
+- pass - требования выполнены, возвращает reward=1;
+- partial - частичный результат, возвращает reward=0;
+- fail - результат непригоден, возвращает reward=0;
+- uncertain - недостаточно уверенности, LinUCB в таком случае не обновляется.
 
 ## REST API
 
-Все тела используют `application/json; charset=utf-8`.
-
-### `GET /health`
+### GET /health
 
 ```json
 {
@@ -250,50 +242,50 @@ Judge получает намерение, ожидаемый контракт �
 }
 ```
 
-### `GET /v1/registry/stats`
+### GET /v1/registry/stats
 
-Возвращает `total`, `enabled` и `active_in_router`.
+Возвращает total - всего инструментов, enabled - включенных и active_in_router.
 
-### `POST /v1/tools`
+### POST /v1/tools
 
 Создаёт инструмент и обновляет semantic index.
 
 | Поле | Тип | Обязательно | Описание |
 |---|---|---:|---|
-| `tool_name` | string | да | Уникальное имя до 255 символов |
-| `description` | string | да | Семантическое описание назначения |
+| `tool_name` | string | да | Уникальное имя |
+| `description` | string | да | Описание инструмента |
 | `input_schema` | object | да | JSON Schema аргументов |
 | `output_schema` | object | да | JSON Schema результата |
-| `cost` | number | да | Начальная неотрицательная стоимость вызова |
+| `cost` | number | да | Начальная стоимость вызова |
 | `latency` | number | нет | Начальная оценка задержки в секундах |
-| `metadata` | object | нет | Непрозрачные данные для внешнего исполнителя |
-| `enabled` | boolean | нет | Участие в поиске, default `true` |
+| `metadata` | object | нет | Метаданные |
+| `enabled` | boolean | нет | Флажок участия в поиске, по умолчанию true |
 
-`metadata` не влияет на retrieval или UCB. Агент может хранить там `provider`, HTTP method/path, имя adapter либо идентификаторы ToolBench Server. Секреты и API-ключи в `metadata` хранить нельзя.
+metadata не влияет на retrieval или UCB. Агент может хранить там provider (для Toolbench), HTTP method/path.
 
-Ответ: `201 Created`. Повторное имя: `409 Conflict`.
+Ответ: 201 Created. Повторное имя: 409 Conflict.
 
-### `GET /v1/tools`
+### GET /v1/tools
 
 Query parameters:
 
-- `limit` — 1–1000, default 100;
-- `offset` — смещение;
-- `enabled=true|false` — необязательный фильтр.
+- **limit** — 1–1000, default 100;
+- **offset** — смещение;
+- **enabled=true|false** — необязательный фильтр.
 
 ```bash
 curl -s "http://127.0.0.1:8080/v1/tools?limit=100&offset=0&enabled=true"
 ```
 
-### `GET /v1/tools/{tool_name}`
+### GET /v1/tools/{tool_name}
 
-Возвращает определение, `version`, `created_at` и `updated_at`. Неизвестное имя: `404`.
+Возвращает определение, version, created_at и updated_at. Неизвестное имя: 404.
 
-### `PUT /v1/tools/{tool_name}`
+### PUT /v1/tools/{tool_name}
 
 Полностью заменяет определение. Имена в path и body должны совпадать. Версия увеличивается, semantic index обновляется, reward-обучение сохраняется.
 
-### `PATCH /v1/tools/{tool_name}/enabled`
+### PATCH /v1/tools/{tool_name}/enabled
 
 ```json
 {"enabled": false}
@@ -301,11 +293,11 @@ curl -s "http://127.0.0.1:8080/v1/tools?limit=100&offset=0&enabled=true"
 
 Выключенный инструмент остаётся в registry, но не участвует в поиске.
 
-### `DELETE /v1/tools/{tool_name}`
+### DELETE /v1/tools/{tool_name}
 
-Физически удаляет определение и модель из текущего router. Успех: `204 No Content`.
+Физически удаляет из текущего router. Успех: 204 No Content.
 
-### `POST /v1/tools/import`
+### POST /v1/tools/import
 
 Bulk import:
 
@@ -325,34 +317,34 @@ Bulk import:
 }
 ```
 
-При `replace_existing=false` существующие имена пропускаются. После импорта активный semantic index обновляется.
+При replace_existing=false существующие имена пропускаются. После импорта активный semantic index обновляется.
 
-### `POST /v1/tools/search`
+### POST /v1/tools/search
 
 | Поле | Обязательно | Смысл |
 |---|---:|---|
-| `query` | да | Непустой запрос |
-| `remaining_budget` | да | Неотрицательный бюджет текущей попытки |
-| `latency_sla` | нет | Положительный предел latency |
-| `retrieval_limit` | нет | Число semantic candidates, default 20 |
-| `result_limit` | нет | Число результатов, default 5 |
-| `retrieval_threshold` | нет | Минимальный cosine similarity, default 0 |
-| `excluded_tools` | нет | Уже вызванные или запрещённые инструменты |
-```
+| query | да | Непустой запрос |
+| remaining_budget | да | Бюджет текущей попытки |
+| latency_sla | нет | Предел latency |
+| retrieval_limit | нет | Число semantic candidates, default 20 |
+| result_limit | нет | Число результатов, default 5 (после отбора по SLA) |
+| retrieval_threshold | нет | Минимальный cosine similarity, default 0 |
+| excluded_tools | нет | Запрещённые инструменты |
+
 
 Ответ:
 
-- `request_id` — ID сохранённого embedding для delayed feedback;
-- `retrieved_count` — кандидаты после semantic threshold/limit;
-- `feasible_count` — кандидаты после budget/SLA/exclusion;
-- `tools` — первые `result_limit` feasible-кандидатов в semantic order;
-- `retrieval_score`, `retrieval_rank` — semantic retrieval;
-- `ucb_score` — дополнительный contextual score;
-- `metadata` — определение для внешнего агента.
+- request_id — ID сохранённого embedding для delayed feedback;
+- retrieved_count — кандидаты после semantic threshold/limit;
+- feasible_count — кандидаты после budget/SLA/exclusion;
+- tools — первые **result_limit** feasible-кандидатов в semantic order;
+- retrieval_score, retrieval_rank=semantic retrieval;
+- ucb_score — дополнительный контекстный score от нашей системы;
+- metadata — метаданные.
 
-### `POST /v1/evaluations`
+### POST /v1/evaluations
 
-Отправляет результат на асинхронную оценку. Ответ: `202 Accepted`.
+Отправляет результат на асинхронную оценку. Ответ: 202 Accepted.
 
 ```bash
 curl -s -X POST http://127.0.0.1:8080/v1/evaluations \
@@ -371,21 +363,21 @@ curl -s -X POST http://127.0.0.1:8080/v1/evaluations \
 
 | Поле | Описание |
 |---|---|
-| `interaction_id` | Необязательный idempotency key |
-| `request_id` | Предпочтительный ID предыдущего search |
-| `context_text` | Fallback, если `request_id` отсутствует |
-| `tool_name` | Реально вызванный инструмент |
-| `tool_intent` | Что должен был выполнить вызов |
-| `expected_contract` | Проверяемые требования |
-| `tool_output` | Структурированный результат или ошибка |
-| `observed_cost` | Фактическая стоимость |
-| `observed_latency` | Фактическая длительность в секундах |
+| interaction_id | Ключ попытки |
+| request_id | Предпочтительный ID предыдущего search |
+| context_text | Fallback, если **request_id** отсутствует |
+| tool_name | Реально вызванный инструмент |
+| tool_intent | Что должен был выполнить вызов |
+| expected_contract | Проверяемые требования |
+| tool_output | Структурированный результат или ошибка |
+| observed_cost | Фактическая стоимость |
+| observed_latency | Фактическая длительность в секундах |
 
-Нужно передать `request_id` или `context_text`. Повторный `interaction_id` не применяет reward дважды.
+Нужно передать request_id или context_text. Повторный interaction_id не применяет reward дважды.
 
-### `GET /v1/evaluations/{evaluation_id}`
+### GET /v1/evaluations/{evaluation_id}
 
-Статусы: `pending`, `completed`, `failed`.
+Статусы: pending, completed, failed.
 
 ```json
 {
@@ -405,9 +397,9 @@ curl -s -X POST http://127.0.0.1:8080/v1/evaluations \
 }
 ```
 
-## Tool adapters и демонстрационные команды
+## Tool adapter и примеры
 
-`ToolAdapter` — агентская абстракция:
+ToolAdapter — абстрактный класс-обертка для работы с роутером:
 
 ```text
 catalog_entry()  → описание для registry
@@ -415,7 +407,7 @@ estimate(args)   → estimated_cost и estimated_latency до вызова
 invoke(args)     → output, observed_cost, observed_latency, status/error
 ```
 
-В комплект входят `OpenMeteoWeatherAdapter` и десять read-only public API examples. Перед production использованием проверяйте правила, quotas и назначение каждого провайдера.
+В комплект входят десять примеров API.
 
 ```bash
 python scripts/register_public_api_examples.py
@@ -428,15 +420,14 @@ python scripts/run_real_api_showcase.py
 ```text
 ToolBandit/
 ├── budget_tool_router/          production-код
-│   ├── ada_embeddings.py       OpenAI encoder и SQLite cache
+│   ├── ada_embeddings.py       OpenAI encoder
 │   ├── adapters.py             tool adapters
 │   ├── judge.py                DeepSeek Judge
-│   ├── registry.py             SQLite registry
+│   ├── registry.py             PostgreSQL registry
 │   ├── retriever.py            semantic retrieval
 │   ├── router.py               diagonal/full disjoint LinUCB
 │   ├── runner.py               fallback attempts
 │   └── service.py              FastAPI и application service
-├── data/                        runtime SQLite, не коммитится
 ├── scripts/                     проверки и демонстрации
 ├── tests/                       pytest-тесты
 ├── run_service.py
@@ -452,33 +443,13 @@ python scripts/check_setup.py
 python scripts/check_api_connections.py
 ```
 
-## Коды ошибок
-
-| HTTP | Причина |
-|---:|---|
-| `201` | Инструмент создан |
-| `202` | Evaluation выполняется асинхронно |
-| `204` | Инструмент удалён |
-| `400` | Некорректные или несовместимые значения |
-| `404` | Инструмент/evaluation не найдены |
-| `409` | Дубликат либо разные path/body tool name |
-| `422` | Ошибка Pydantic или отсутствует context |
-| `503` | Judge отключён или index не обновился |
-
-После изменения кода перезапускайте Uvicorn: работающий процесс не перечитывает Python-модули автоматически.
-
-## Термины и фоновая информация
+## Доп. информация
 
 - **Contextual bandit** — выбор действия с учётом контекста и reward: [LinUCB paper](https://arxiv.org/abs/1003.0146).
 - **UCB** — upper confidence bound, оптимистичная оценка reward с exploration bonus.
 - **SLA** — service-level agreement; здесь предел допустимой задержки.
 - **Delayed feedback** — reward приходит после выполнения инструмента.
 - **ToolBench** — набор данных и инфраструктура tool-use: [ToolLLM/ToolBench](https://arxiv.org/abs/2307.16789).
-
-## Планируемые production-доработки
-
-- persistent LinUCB state и durable evaluation queue;
-- готовый ToolBench importer и ToolBench Server adapter.
 
 ## Лицензия
 
