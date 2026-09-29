@@ -1,8 +1,8 @@
 """Budget-Aware Greedy LinUCB adapted to tool selection.
 
 The reward model learns contextual pass/fail outcomes. Cost and latency are
-kept outside the reward model: cost constrains the remaining budget and
-normalizes the optimistic reward, while latency is an SLA constraint.
+kept outside the reward model: they constrain feasibility and are subtracted
+from the optimistic reward as normalized resource penalties.
 """
 
 from __future__ import annotations
@@ -158,11 +158,13 @@ class Decision:
 
 
 class BudgetAwareToolRouter:
-    """Score tools by optimistic pass rate discounted by resource use.
+    """Score tools by optimistic pass rate minus normalized resource use.
 
     Selection policy::
 
-        PassUCB(query, a) / (1 + normalized resource estimate)
+        PassUCB(query, a)
+        - cost_weight * CostUCB(a) / cost_scale
+        - latency_weight * LatencyUCB(a) / latency_scale
 
     subject to ``CostUCB <= remaining_budget`` and, when supplied,
     ``LatencyUCB <= latency_sla``.
@@ -176,8 +178,6 @@ class BudgetAwareToolRouter:
         alpha: float = 1.0,
         regularization: float = 1.0,
         confidence_delta: float = 0.05,
-        epsilon: float = 1e-8,
-        latency_penalty: float = 0.0,
         diagonal_covariance: bool = False,
         cost_weight: float = 1.0,
         latency_weight: float = 0.0,
@@ -186,12 +186,10 @@ class BudgetAwareToolRouter:
     ) -> None:
         if context_dimension <= 0:
             raise ValueError("context_dimension must be positive")
-        if alpha < 0 or regularization <= 0 or epsilon <= 0:
+        if alpha < 0 or regularization <= 0:
             raise ValueError("invalid LinUCB parameters")
         if not 0 < confidence_delta < 1:
             raise ValueError("confidence_delta must be in (0, 1)")
-        if latency_penalty < 0:
-            raise ValueError("latency_penalty must be non-negative")
         if cost_weight < 0 or latency_weight < 0 or cost_weight + latency_weight <= 0:
             raise ValueError("resource weights must be non-negative and not both zero")
         if cost_scale <= 0 or latency_scale <= 0:
@@ -201,12 +199,9 @@ class BudgetAwareToolRouter:
         self.alpha = alpha
         self.regularization = regularization
         self.confidence_delta = confidence_delta
-        self.epsilon = epsilon
-        self.latency_penalty = latency_penalty
         self.diagonal_covariance = diagonal_covariance
-        weight_sum = cost_weight + latency_weight
-        self.cost_weight = cost_weight / weight_sum
-        self.latency_weight = latency_weight / weight_sum
+        self.cost_weight = cost_weight
+        self.latency_weight = latency_weight
         self.cost_scale = cost_scale
         self.latency_scale = latency_scale
         self.step = 0
@@ -350,15 +345,11 @@ class BudgetAwareToolRouter:
             # estimates within their meaningful range. Keep raw uncertainty visible.
             mean = min(1.0, max(0.0, raw_mean))
             pass_ucb = min(1.0, max(mean, raw_pass_ucb))
-            resource_lcb = (
-                self.cost_weight * cost_lcb / self.cost_scale
-                + self.latency_weight * latency_lcb / self.latency_scale
+            resource_penalty = (
+                self.cost_weight * cost_ucb / self.cost_scale
+                + self.latency_weight * latency_ucb / self.latency_scale
             )
-            # The +1 regularizes free and cold-start tools. Without it, a
-            # zero resource estimate divides by epsilon and produces scores
-            # in the tens of millions, even though pass_ucb is in [0, 1].
-            score = pass_ucb / (1.0 + resource_lcb)
-            score -= self.latency_penalty * latency_ucb
+            score = pass_ucb - resource_penalty
             decisions.append(
                 Decision(
                     tool_name=name,
