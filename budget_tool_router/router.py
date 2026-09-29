@@ -59,6 +59,11 @@ class _RunningEstimate:
     mean: Optional[float]
     count: float
     value_range: float
+    smoothing: float
+
+    def __post_init__(self) -> None:
+        if not 0 < self.smoothing <= 1:
+            raise ValueError("smoothing must be in (0, 1]")
 
     def update(self, value: float) -> None:
         if value < 0 or not math.isfinite(value):
@@ -68,7 +73,7 @@ class _RunningEstimate:
             self.count = 1.0
         else:
             self.count += 1.0
-            self.mean += (value - self.mean) / self.count
+            self.mean += self.smoothing * (value - self.mean)
 
     def radius(self, *, step: int, delta: float) -> float:
         if self.count <= 0 or self.mean is None:
@@ -183,6 +188,8 @@ class BudgetAwareToolRouter:
         latency_weight: float = 0.0,
         cost_scale: float = 1.0,
         latency_scale: float = 1.0,
+        cost_ema_alpha: float = 1.0 / 20.0,
+        latency_ema_alpha: float = 1.0 / 1000.0,
     ) -> None:
         if context_dimension <= 0:
             raise ValueError("context_dimension must be positive")
@@ -194,6 +201,8 @@ class BudgetAwareToolRouter:
             raise ValueError("resource weights must be non-negative and not both zero")
         if cost_scale <= 0 or latency_scale <= 0:
             raise ValueError("resource scales must be positive")
+        if not 0 < cost_ema_alpha <= 1 or not 0 < latency_ema_alpha <= 1:
+            raise ValueError("EMA coefficients must be in (0, 1]")
 
         self.context_dimension = context_dimension
         self.alpha = alpha
@@ -204,6 +213,8 @@ class BudgetAwareToolRouter:
         self.latency_weight = latency_weight
         self.cost_scale = cost_scale
         self.latency_scale = latency_scale
+        self.cost_ema_alpha = cost_ema_alpha
+        self.latency_ema_alpha = latency_ema_alpha
         self.step = 0
         self._states: Dict[str, _ToolState] = {}
 
@@ -221,11 +232,13 @@ class BudgetAwareToolRouter:
                     spec.initial_cost,
                     spec.prior_count if spec.initial_cost is not None else 0.0,
                     spec.cost_range,
+                    cost_ema_alpha,
                 ),
                 latency=_RunningEstimate(
                     spec.initial_latency,
                     spec.prior_count if spec.initial_latency is not None else 0.0,
                     spec.latency_range,
+                    latency_ema_alpha,
                 ),
             )
     @property
@@ -244,9 +257,11 @@ class BudgetAwareToolRouter:
                     else _DisjointLinUCB(self.context_dimension, self.regularization)
                 ),
                 cost=_RunningEstimate(spec.initial_cost,
-                    spec.prior_count if spec.initial_cost is not None else 0.0, spec.cost_range),
+                    spec.prior_count if spec.initial_cost is not None else 0.0,
+                    spec.cost_range, self.cost_ema_alpha),
                 latency=_RunningEstimate(spec.initial_latency,
-                    spec.prior_count if spec.initial_latency is not None else 0.0, spec.latency_range),
+                    spec.prior_count if spec.initial_latency is not None else 0.0,
+                    spec.latency_range, self.latency_ema_alpha),
             )
             return
         existing.spec = spec
