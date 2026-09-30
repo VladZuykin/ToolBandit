@@ -96,6 +96,56 @@ class BudgetAwareToolRouterTests(unittest.TestCase):
         self.assertGreaterEqual(decision.score, 0.0)
         self.assertLessEqual(decision.score, 1.0)
 
+    def test_score_uses_additive_resource_penalties(self) -> None:
+        router = BudgetAwareToolRouter(
+            [ToolSpec("tool", 0.004, 1.2, fixed_cost=0.004, prior_count=1)],
+            alpha=0.82,
+            cost_weight=0.25,
+            latency_weight=0.15,
+            cost_scale=0.01,
+            latency_scale=3.0,
+        )
+        decision = router.select(context(0), remaining_budget=1.0, latency_sla=5.0)
+
+        expected_penalty = 0.25 * (0.004 / 0.01)
+        expected_penalty += 0.15 * (1.2 / 3.0)
+        self.assertAlmostEqual(decision.score, decision.pass_ucb - expected_penalty)
+
+    def test_resources_use_separate_exponential_moving_averages(self) -> None:
+        router = BudgetAwareToolRouter(
+            [ToolSpec("tool", 10.0, 10.0, prior_count=1)],
+            alpha=0.0,
+            cost_weight=0.5,
+            latency_weight=0.5,
+            cost_scale=10.0,
+            latency_scale=10.0,
+        )
+
+        router.observe_resources("tool", observed_cost=30.0, observed_latency=30.0)
+        decision = router.select(context(0), remaining_budget=100.0, latency_sla=100.0)
+
+        self.assertAlmostEqual(decision.cost_ucb, 11.0)  # 10 + (1/20) * 20
+        self.assertAlmostEqual(decision.latency_ucb, 10.02)  # 10 + (1/1000) * 20
+
+    def test_pass_model_forgets_old_observations(self) -> None:
+        router = BudgetAwareToolRouter(
+            [ToolSpec("tool", 0.0, 0.1, fixed_cost=0.0, prior_count=1)],
+            alpha=0.0,
+            diagonal_covariance=True,
+            pass_ema_alpha=1.0 / 1000.0,
+        )
+        x = context(0)
+        for _ in range(1000):
+            router.observe_reward("tool", x, passed=True)
+        mean_before_failures = router.select(x, remaining_budget=1.0).pass_mean
+
+        for _ in range(1000):
+            router.observe_reward("tool", x, passed=False)
+        mean_after_failures = router.select(x, remaining_budget=1.0).pass_mean
+
+        self.assertGreater(mean_before_failures, 0.99)
+        self.assertLess(mean_after_failures, 0.4)
+
     def test_greedy_fallback_uses_distinct_tools(self) -> None:
         router = self.make_router()
         calls = []
