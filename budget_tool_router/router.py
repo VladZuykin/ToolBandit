@@ -87,6 +87,7 @@ class _RunningEstimate:
 class _DisjointLinUCB:
     dimension: int
     regularization: float
+    discount: float
     a_inv: np.ndarray = field(init=False, repr=False)
     a_diag: np.ndarray = field(init=False, repr=False)
     b: np.ndarray = field(init=False, repr=False)
@@ -107,7 +108,11 @@ class _DisjointLinUCB:
         return mean, uncertainty, mean + alpha * uncertainty
 
     def update(self, context: np.ndarray, reward: float) -> None:
-        # Sherman-Morrison rank-one update: O(d^2), avoiding a fresh inverse.
+        # Discount old evidence, then apply the Sherman-Morrison rank-one
+        # update. If A' = discount * A, then A'^-1 = A^-1 / discount.
+        self.a_inv /= self.discount
+        self.a_diag *= self.discount
+        self.b *= self.discount
         ax = self.a_inv @ context
         denominator = 1.0 + float(context @ ax)
         self.a_inv -= np.outer(ax, ax) / denominator
@@ -120,6 +125,7 @@ class _DisjointLinUCB:
 class _DiagonalLinUCB:
     dimension: int
     regularization: float
+    discount: float
     a_diag: np.ndarray = field(init=False, repr=False)
     b: np.ndarray = field(init=False, repr=False)
     observations: int = 0
@@ -135,6 +141,8 @@ class _DiagonalLinUCB:
         return mean, uncertainty, mean + alpha * uncertainty
 
     def update(self, context: np.ndarray, reward: float) -> None:
+        self.a_diag *= self.discount
+        self.b *= self.discount
         self.a_diag += context * context
         self.b += reward * context
         self.observations += 1
@@ -190,6 +198,7 @@ class BudgetAwareToolRouter:
         latency_scale: float = 1.0,
         cost_ema_alpha: float = 1.0 / 20.0,
         latency_ema_alpha: float = 1.0 / 1000.0,
+        pass_ema_alpha: float = 1.0 / 1000.0,
     ) -> None:
         if context_dimension <= 0:
             raise ValueError("context_dimension must be positive")
@@ -203,6 +212,8 @@ class BudgetAwareToolRouter:
             raise ValueError("resource scales must be positive")
         if not 0 < cost_ema_alpha <= 1 or not 0 < latency_ema_alpha <= 1:
             raise ValueError("EMA coefficients must be in (0, 1]")
+        if not 0 < pass_ema_alpha < 1:
+            raise ValueError("pass_ema_alpha must be in (0, 1)")
 
         self.context_dimension = context_dimension
         self.alpha = alpha
@@ -215,6 +226,8 @@ class BudgetAwareToolRouter:
         self.latency_scale = latency_scale
         self.cost_ema_alpha = cost_ema_alpha
         self.latency_ema_alpha = latency_ema_alpha
+        self.pass_ema_alpha = pass_ema_alpha
+        self.pass_discount = 1.0 - pass_ema_alpha
         self.step = 0
         self._states: Dict[str, _ToolState] = {}
 
@@ -224,9 +237,9 @@ class BudgetAwareToolRouter:
             self._states[spec.name] = _ToolState(
                 spec=spec,
                 reward_model=(
-                    _DiagonalLinUCB(context_dimension, regularization)
+                    _DiagonalLinUCB(context_dimension, regularization, self.pass_discount)
                     if diagonal_covariance
-                    else _DisjointLinUCB(context_dimension, regularization)
+                    else _DisjointLinUCB(context_dimension, regularization, self.pass_discount)
                 ),
                 cost=_RunningEstimate(
                     spec.initial_cost,
@@ -252,9 +265,13 @@ class BudgetAwareToolRouter:
             self._states[spec.name] = _ToolState(
                 spec=spec,
                 reward_model=(
-                    _DiagonalLinUCB(self.context_dimension, self.regularization)
+                    _DiagonalLinUCB(
+                        self.context_dimension, self.regularization, self.pass_discount
+                    )
                     if self.diagonal_covariance
-                    else _DisjointLinUCB(self.context_dimension, self.regularization)
+                    else _DisjointLinUCB(
+                        self.context_dimension, self.regularization, self.pass_discount
+                    )
                 ),
                 cost=_RunningEstimate(spec.initial_cost,
                     spec.prior_count if spec.initial_cost is not None else 0.0,
