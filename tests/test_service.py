@@ -78,6 +78,15 @@ class ServiceTests(unittest.TestCase):
         self.assertNotIn("recommended_tool", result)
         self.assertEqual([row["tool"] for row in result["tools"]], ["weather", "whois"])
 
+    def test_search_respects_upstream_candidate_set(self):
+        service = self.make_service()
+        result = service.search({
+            "query": "weather temperature", "remaining_budget": 1.0,
+            "retrieval_threshold": 0.0, "retrieval_limit": 2, "result_limit": 2,
+            "candidate_tools": ["whois"],
+        })
+        self.assertEqual([row["tool"] for row in result["tools"]], ["whois"])
+
     def test_async_judge_performs_delayed_update(self):
         service = self.make_service()
         search = service.search({

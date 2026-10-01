@@ -55,15 +55,21 @@ class ToolRoutingService:
         sla = request.get("latency_sla")
         sla = None if sla is None else float(sla)
         excluded = request.get("excluded_tools", [])
+        candidate_tools = request.get("candidate_tools")
+        allowed = None if candidate_tools is None else set(candidate_tools)
         with self._lock:
             if not self.retriever.documents:
                 return {
                     "request_id": str(uuid.uuid4()),
                     "retrieved_count": 0, "feasible_count": 0, "tools": [],
                 }
-        context, hits = self.retriever.search(
-            query, limit=retrieval_limit, threshold=threshold
-        )
+        # When an upstream retriever supplies a candidate set, score the whole
+        # local catalog first and then retain only that set. This lets ToolBandit
+        # add QoS/UCB decisions without admitting semantically unrelated tools.
+        search_limit = len(self.retriever.documents) if allowed is not None else retrieval_limit
+        context, hits = self.retriever.search(query, limit=search_limit, threshold=threshold)
+        if allowed is not None:
+            hits = [hit for hit in hits if hit.tool_name in allowed][:retrieval_limit]
         hit_by_name = {hit.tool_name: hit for hit in hits}
         with self._lock:
             decisions = self.router.rank(
@@ -180,6 +186,7 @@ class SearchRequest(BaseModel):
     result_limit: int = Field(default=5, ge=1)
     retrieval_threshold: float = 0.0
     excluded_tools: list[str] = Field(default_factory=list)
+    candidate_tools: Optional[list[str]] = None
 
 
 class EvaluationRequest(BaseModel):
@@ -237,6 +244,11 @@ def create_app(service: ToolRoutingService) -> FastAPI:
             "api_version": "1.1.0",
             "ranking_policy": "semantic_order_with_ucb_annotation",
             "covariance": "diagonal" if service.router.diagonal_covariance else "full",
+            "alpha": service.router.alpha,
+            "cost_weight": service.router.cost_weight,
+            "latency_weight": service.router.latency_weight,
+            "cost_scale": service.router.cost_scale,
+            "latency_scale": service.router.latency_scale,
         }
 
     @app.post("/v1/tools/search", tags=["routing"])
@@ -266,6 +278,16 @@ def create_app(service: ToolRoutingService) -> FastAPI:
         if item is None:
             raise HTTPException(status_code=404, detail="tool not found")
         return item
+
+    @app.delete("/v1/tools/by-name", status_code=204, tags=["registry"])
+    def delete_tool_by_name(tool_name: str) -> None:
+        """Delete one tool using a query parameter, including names containing '/'."""
+        registry = require_registry()
+        if not registry.delete(tool_name):
+            raise HTTPException(status_code=404, detail="tool not found")
+        with service._lock:
+            service.router.remove_tool(tool_name)
+        service.refresh_registry()
 
     @app.post("/v1/tools", status_code=201, tags=["registry"])
     def create_tool(request: ToolDefinitionRequest) -> dict[str, Any]:

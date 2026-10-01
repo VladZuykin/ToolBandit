@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $PSScriptRoot
-$ExpectedCommit = "aa4ed9f4737ad98bd706663f01d63623c3427812"
+$ExpectedCommit = "34c5cf0b4a20a7f42e7fd55ef3feeace77d5ff5c"
 $Submodule = Join-Path $Root "external/StableToolBenchQoS"
 $Venv = Join-Path $Root ".venv-toolbench-server"
 $PythonBin = if ($env:PYTHON_BIN) { $env:PYTHON_BIN } else { "python" }

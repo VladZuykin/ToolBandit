@@ -6,7 +6,11 @@ from budget_tool_router import create_app
 def test_fastapi_routes_and_openapi_are_exposed():
     service = SimpleNamespace(
         judge=None, registry=None,
-        router=SimpleNamespace(tool_names=[], diagonal_covariance=True),
+        router=SimpleNamespace(
+            tool_names=[], diagonal_covariance=True, alpha=0.35,
+            cost_weight=0.5, latency_weight=0.5,
+            cost_scale=0.012, latency_scale=3.0,
+        ),
     )
     app = create_app(service)
     paths = app.openapi()["paths"]
@@ -15,6 +19,7 @@ def test_fastapi_routes_and_openapi_are_exposed():
     assert "/v1/tools" in paths
     assert "/v1/tools/{tool_name}" in paths
     assert "/v1/tools/{tool_name}/enabled" in paths
+    assert "/v1/tools/by-name" in paths
     assert "/v1/tools/import" in paths
     assert "/v1/registry/stats" in paths
     assert "/v1/evaluations" in paths

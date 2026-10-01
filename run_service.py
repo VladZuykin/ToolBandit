@@ -37,8 +37,11 @@ def main() -> None:
     retriever = SemanticToolRetriever(encoder, documents)
     covariance, diagonal_covariance = covariance_mode()
     router = BudgetAwareToolRouter(
-        specs, context_dimension=1536, alpha=0.35, regularization=1.0,
-        diagonal_covariance=diagonal_covariance, cost_weight=0.5, latency_weight=0.5,
+        specs, context_dimension=1536,
+        alpha=float(os.getenv("TOOLBANDIT_ALPHA", "0.35")), regularization=1.0,
+        diagonal_covariance=diagonal_covariance,
+        cost_weight=float(os.getenv("TOOL_COST_WEIGHT", "0.5")),
+        latency_weight=float(os.getenv("TOOL_LATENCY_WEIGHT", "0.5")),
         cost_scale=float(os.getenv("TOOL_COST_SCALE", "0.012")),
         latency_scale=float(os.getenv("TOOL_LATENCY_SCALE", "3.0")),
     )

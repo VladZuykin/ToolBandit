@@ -1,7 +1,8 @@
 {
   "repository": "https://github.com/VladZuykin/StableToolBenchQoS.git",
   "path": "external/StableToolBenchQoS",
-  "commit": "aa4ed9f4737ad98bd706663f01d63623c3427812",
+  "branch": "develop",
+  "commit": "34c5cf0b4a20a7f42e7fd55ef3feeace77d5ff5c",
   "python": "3.11",
   "biasbusters_dataset": {
     "filename": "toolbench_bias_queries.json",

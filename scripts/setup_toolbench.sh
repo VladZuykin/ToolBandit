@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXPECTED_COMMIT="aa4ed9f4737ad98bd706663f01d63623c3427812"
+EXPECTED_COMMIT="34c5cf0b4a20a7f42e7fd55ef3feeace77d5ff5c"
 SUBMODULE="$ROOT/external/StableToolBenchQoS"
 VENV="$ROOT/.venv-toolbench-server"
 

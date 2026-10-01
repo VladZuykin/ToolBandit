@@ -78,9 +78,9 @@ curl -s http://127.0.0.1:8080/health | python -m json.tool
 ### Проверка и запуск
 
 ```bash
-python scripts/check_setup.py 
-python scripts/check_api_connections.py
-python run_service.py
+python scripts/check_setup.py # Локальная проверка, установлено ли нужное окружение
+python scripts/check_api_connections.py # Тест с запросами к Deepseek и Open AI
+python run_service.py # Запуск сервиса
 ```
 
 ```bash
@@ -449,7 +449,7 @@ python scripts/check_api_connections.py
 - **UCB** — upper confidence bound, оптимистичная оценка reward с exploration bonus.
 - **SLA** — service-level agreement; здесь предел допустимой задержки.
 - **Delayed feedback** — reward приходит после выполнения инструмента.
-- **ToolBench** — набор данных и инфраструктура tool-use: [ToolLLM/ToolBench](https://arxiv.org/abs/2307.16789).
+- **ToolBench** — набор данных и инфраструктура интеграции с внешними API: [ToolLLM/ToolBench](https://arxiv.org/abs/2307.16789).
 
 ## Лицензия
 
