@@ -9,7 +9,8 @@ def test_fastapi_routes_and_openapi_are_exposed():
         router=SimpleNamespace(
             tool_names=[], diagonal_covariance=True, alpha=0.35,
             cost_weight=0.5, latency_weight=0.5,
-            cost_scale=0.012, latency_scale=3.0,
+                cost_scale=0.012, latency_scale=3.0,
+                lqm_latency_reference=3.0, lqm_deflation=1.0,
         ),
     )
     app = create_app(service)

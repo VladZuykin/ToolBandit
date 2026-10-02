@@ -1,4 +1,6 @@
 import importlib.util
+import http.client
+import json
 from pathlib import Path
 
 
@@ -45,6 +47,37 @@ def test_json_object_accepts_json_code_fence():
     assert MODULE._json_object('```json\n{"address":"Berlin"}\n```') == {"address": "Berlin"}
 
 
+def test_argument_generator_retries_remote_disconnect(monkeypatch):
+    calls = 0
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            body = {"choices": [{"message": {"content": '{"address":"Berlin"}'}}]}
+            return json.dumps(body).encode("utf-8")
+
+    def fake_urlopen(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise http.client.RemoteDisconnected("temporary disconnect")
+        return Response()
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(MODULE, "urlopen", fake_urlopen)
+    monkeypatch.setattr(MODULE.time, "sleep", lambda _: None)
+    result = MODULE.generate_tool_arguments(
+        "Where is Berlin?", api(), model="deepseek-chat", timeout=1, retries=1
+    )
+    assert result == {"address": "Berlin"}
+    assert calls == 2
+
+
 def test_select_candidate_supports_ucb_top1_and_resource_baselines():
     candidates = [
         {"tool": "a", "ucb_score": 0.4, "retrieval_rank": 1,
@@ -63,3 +96,10 @@ def test_select_candidate_supports_ucb_top1_and_resource_baselines():
     assert MODULE.select_candidate(candidates, policy="cheapest", **kwargs)["tool"] == "a"
     assert MODULE.select_candidate(candidates, policy="fastest", **kwargs)["tool"] == "a"
     assert MODULE.select_candidate(candidates, policy="highest-pass-rate", **kwargs)["tool"] == "b"
+    lqm_candidates = [
+        dict(candidates[0], lqm_score=0.9),
+        dict(candidates[1], lqm_score=0.2),
+    ]
+    assert MODULE.select_candidate(
+        lqm_candidates, policy="lqm-context-route", **kwargs
+    )["tool"] == "a"

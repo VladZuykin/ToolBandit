@@ -1,0 +1,9 @@
+CREATE DATABASE toolbandit_embeddings;
+CREATE DATABASE toolbandit_ucb;
+CREATE DATABASE toolbandit_lqm;
+CREATE DATABASE toolbandit_semantic;
+CREATE DATABASE toolbandit_random;
+CREATE DATABASE toolbandit_cheapest;
+CREATE DATABASE toolbandit_fastest;
+CREATE DATABASE toolbandit_passrate;
+CREATE DATABASE toolbandit_oracle;

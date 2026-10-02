@@ -62,6 +62,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(result["tools"][0]["retrieval_rank"], 1)
         self.assertIn("retrieval_score", result["tools"][0])
         self.assertIn("ucb_score", result["tools"][0])
+        self.assertIn("lqm_score", result["tools"][0])
         self.assertNotIn("routing_rank", result["tools"][0])
         self.assertNotIn("bandit_rank", result["tools"][0])
         self.assertNotIn("estimated_cost", result["tools"][0])

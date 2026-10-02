@@ -1,0 +1,113 @@
+name: toolbandit-benchmark
+
+x-postgres: &postgres
+  image: postgres:16.4-alpine
+  environment: &postgres_environment
+    POSTGRES_DB: toolbandit
+    POSTGRES_USER: toolbandit
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U toolbandit -d toolbandit"]
+    interval: 5s
+    timeout: 3s
+    retries: 20
+
+x-api: &api
+  build: .
+  restart: on-failure
+  environment: &api_environment
+    PYTHONUNBUFFERED: "1"
+    OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+    DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY}
+    TOOLBANDIT_HOST: 0.0.0.0
+    TOOLBANDIT_PORT: 8080
+    TOOLBANDIT_COVARIANCE: diagonal
+    TOOL_COST_SCALE: ${TOOL_COST_SCALE:-0.012}
+    TOOL_LATENCY_SCALE: ${TOOL_LATENCY_SCALE:-3.0}
+    TOOL_COST_WEIGHT: ${TOOL_COST_WEIGHT:-0.5}
+    TOOL_LATENCY_WEIGHT: ${TOOL_LATENCY_WEIGHT:-0.5}
+    TOOLBANDIT_ALPHA: ${TOOLBANDIT_ALPHA:-0.35}
+    LQM_LATENCY_REFERENCE: ${LQM_LATENCY_REFERENCE:-3.0}
+    LQM_DEFLATION: ${LQM_DEFLATION:-1.0}
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+    interval: 5s
+    timeout: 5s
+    retries: 20
+
+services:
+  postgres-embeddings:
+    <<: *postgres
+    environment: *postgres_environment
+    volumes: [toolbandit_benchmark_embeddings:/var/lib/postgresql/data]
+
+  postgres-agentic:
+    <<: *postgres
+    environment: *postgres_environment
+    volumes: [toolbandit_benchmark_agentic:/var/lib/postgresql/data]
+
+  postgres-oracle:
+    <<: *postgres
+    environment: *postgres_environment
+    volumes: [toolbandit_benchmark_oracle:/var/lib/postgresql/data]
+
+  postgres-ucb:
+    <<: *postgres
+    environment: *postgres_environment
+    volumes: [toolbandit_benchmark_ucb:/var/lib/postgresql/data]
+
+  postgres-lqm:
+    <<: *postgres
+    environment: *postgres_environment
+    volumes: [toolbandit_benchmark_lqm:/var/lib/postgresql/data]
+
+  api-agentic:
+    <<: *api
+    environment:
+      <<: *api_environment
+      DATABASE_URL: postgresql://toolbandit:${POSTGRES_PASSWORD}@postgres-agentic:5432/toolbandit
+      EMBEDDING_DATABASE_URL: postgresql://toolbandit:${POSTGRES_PASSWORD}@postgres-embeddings:5432/toolbandit
+    ports: ["8090:8080"]
+    depends_on:
+      postgres-agentic: {condition: service_healthy}
+      postgres-embeddings: {condition: service_healthy}
+
+  api-oracle:
+    <<: *api
+    environment:
+      <<: *api_environment
+      DATABASE_URL: postgresql://toolbandit:${POSTGRES_PASSWORD}@postgres-oracle:5432/toolbandit
+      EMBEDDING_DATABASE_URL: postgresql://toolbandit:${POSTGRES_PASSWORD}@postgres-embeddings:5432/toolbandit
+    ports: ["8091:8080"]
+    depends_on:
+      postgres-oracle: {condition: service_healthy}
+      postgres-embeddings: {condition: service_healthy}
+
+  api-ucb:
+    <<: *api
+    environment:
+      <<: *api_environment
+      DATABASE_URL: postgresql://toolbandit:${POSTGRES_PASSWORD}@postgres-ucb:5432/toolbandit
+      EMBEDDING_DATABASE_URL: postgresql://toolbandit:${POSTGRES_PASSWORD}@postgres-embeddings:5432/toolbandit
+    ports: ["8092:8080"]
+    depends_on:
+      postgres-ucb: {condition: service_healthy}
+      postgres-embeddings: {condition: service_healthy}
+
+  api-lqm:
+    <<: *api
+    environment:
+      <<: *api_environment
+      DATABASE_URL: postgresql://toolbandit:${POSTGRES_PASSWORD}@postgres-lqm:5432/toolbandit
+      EMBEDDING_DATABASE_URL: postgresql://toolbandit:${POSTGRES_PASSWORD}@postgres-embeddings:5432/toolbandit
+    ports: ["8093:8080"]
+    depends_on:
+      postgres-lqm: {condition: service_healthy}
+      postgres-embeddings: {condition: service_healthy}
+
+volumes:
+  toolbandit_benchmark_embeddings:
+  toolbandit_benchmark_agentic:
+  toolbandit_benchmark_oracle:
+  toolbandit_benchmark_ucb:
+  toolbandit_benchmark_lqm:

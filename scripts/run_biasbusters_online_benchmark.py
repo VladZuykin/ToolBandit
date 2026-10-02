@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
+from collections import Counter, defaultdict
 import hashlib
+import http.client
 import json
 import os
 import random
@@ -46,7 +47,7 @@ def request_json(
             detail = error.read().decode("utf-8", errors="replace")
             if error.code not in {408, 429, 500, 502, 503, 504} or retry_index >= retries:
                 raise RuntimeError("HTTP {} {}: {}".format(error.code, url, detail)) from error
-        except (URLError, TimeoutError) as error:
+        except (URLError, TimeoutError, ConnectionError, http.client.HTTPException) as error:
             if retry_index >= retries:
                 reason = getattr(error, "reason", error)
                 raise RuntimeError("cannot reach {}: {}".format(url, reason)) from error
@@ -70,6 +71,8 @@ def standardize(value: str) -> str:
 
 
 def api_id(api: dict[str, Any]) -> str:
+    if api.get("_api_id"):
+        return str(api["_api_id"])
     category = re.sub(
         r"_+", "_", str(api.get("category_name") or "").replace(" ", "_").replace(",", "_").replace("/", "_")
     )
@@ -187,9 +190,11 @@ def catalog_definitions(
             "cost": profile["cost"],
             "latency": profile["latency"],
             "metadata": {
+                "api_id": api_id(api),
                 "category_name": api.get("category_name", ""),
                 "tool_name": api["tool_name"],
                 "api_name": api["api_name"],
+                "api_description": api.get("api_description", ""),
                 "required_parameters": api.get("required_parameters", []),
                 "optional_parameters": api.get("optional_parameters", []),
                 "template_response": api.get("template_response", {}),
@@ -275,7 +280,12 @@ def generate_tool_arguments(
                 raise RuntimeError(
                     "DeepSeek argument generation failed: HTTP {}: {}".format(error.code, detail)
                 ) from error
-        except (URLError, TimeoutError) as error:
+        except (
+            URLError,
+            TimeoutError,
+            ConnectionError,
+            http.client.HTTPException,
+        ) as error:
             if retry_index >= retries:
                 raise RuntimeError(
                     "DeepSeek argument generation failed after {} attempts: {}".format(
@@ -306,11 +316,11 @@ def profile_for_candidate(
     candidate: dict[str, Any], profiles: dict[str, dict[str, float]]
 ) -> dict[str, float]:
     metadata = candidate.get("metadata") or {}
-    identity = api_id({
+    identity = str(metadata.get("api_id") or api_id({
         "category_name": metadata.get("category_name", ""),
         "tool_name": metadata.get("tool_name", ""),
         "api_name": metadata.get("api_name", ""),
-    })
+    }))
     return profiles[identity]
 
 
@@ -322,6 +332,8 @@ def select_candidate(
 ) -> dict[str, Any]:
     if policy in {"ucb", "ucb-top1"}:
         return max(candidates, key=lambda item: (float(item["ucb_score"]), -int(item["retrieval_rank"])))
+    if policy == "lqm-context-route":
+        return max(candidates, key=lambda item: (float(item["lqm_score"]), -int(item["retrieval_rank"])))
     if policy == "semantic":
         return candidates[0]
     if policy == "random":
@@ -356,7 +368,10 @@ def wait_for_judge(
 ) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     while True:
-        job = request_json(base_url.rstrip("/") + "/v1/evaluations/" + evaluation_id)
+        job = request_json(
+            base_url.rstrip("/") + "/v1/evaluations/" + evaluation_id,
+            retries=4,
+        )
         if job.get("status") != "pending":
             return job
         if time.monotonic() >= deadline:
@@ -405,7 +420,7 @@ def main() -> int:
     parser.add_argument(
         "--selection-policy",
         choices=("ucb", "ucb-top1", "semantic", "random", "cheapest", "fastest",
-                 "highest-pass-rate", "oracle-utility"),
+                 "highest-pass-rate", "oracle-utility", "lqm-context-route"),
         default="ucb",
     )
     parser.add_argument("--oracle-cost-weight", type=float, default=0.5)
@@ -425,8 +440,8 @@ def main() -> int:
         help="Delete all registered tools before importing the 50 benchmark tools.",
     )
     args = parser.parse_args()
-    if args.offset < 0 or args.limit is not None and args.limit < 1:
-        parser.error("offset must be non-negative and limit must be positive")
+    if args.offset < 0 or args.limit is not None and args.limit < 0:
+        parser.error("offset and limit must be non-negative")
 
     rows = load_benchmark_rows(args.dataset, args.clusters)
     if args.samples_per_cluster is not None:
@@ -494,13 +509,23 @@ def main() -> int:
     run_id = uuid.uuid4().hex
     selection_rng = random.Random(args.seed)
     attempts_total = successes = no_candidate = judge_failures = 0
+    cluster_metrics: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "queries": 0, "successes": 0, "attempts": 0,
+            "total_cost": 0.0, "latencies": [],
+        }
+    )
     total_cost = 0.0
     latencies: list[float] = []
     selected_tools: Counter[str] = Counter()
     print("[3/5] Running {} queries from offset {} ...".format(len(selected_rows), args.offset), flush=True)
+    benchmark_started = time.monotonic()
     with args.output.open("w", encoding="utf-8", newline="\n") as output_file:
         for position, row in enumerate(selected_rows, start=1):
             query = str(row["query"])
+            cluster_key = str(row.get("cluster_id", "expanded"))
+            cluster_metric = cluster_metrics[cluster_key]
+            cluster_metric["queries"] += 1
             relevant_tools = [tool_name(api) for api in row["api_list"]]
             context = query
             remaining_budget = args.request_budget
@@ -552,13 +577,17 @@ def main() -> int:
                     "strip": "",
                     "toolbench_key": "",
                 }
-                call = request_json(args.toolbench_url, method="POST", payload=call_payload, timeout=180)
+                call = request_json(
+                    args.toolbench_url, method="POST", payload=call_payload,
+                    timeout=180, retries=4,
+                )
                 qos = dict(call.get("qos") or {})
                 observed_cost = float(qos.get("cost_units") or 0.0)
                 observed_latency = float(qos.get("latency_ms") or 0.0) / 1000.0
                 evaluation = request_json(
                     toolbandit + "/v1/evaluations",
                     method="POST",
+                    retries=4,
                     payload={
                         "interaction_id": "bb-{}-{}-{}-{}".format(
                             run_id, row["query_id"], args.offset + position, attempt_index
@@ -605,13 +634,17 @@ def main() -> int:
                 }
                 attempts.append(attempt)
                 attempts_total += 1
+                cluster_metric["attempts"] += 1
                 total_cost += observed_cost
+                cluster_metric["total_cost"] += observed_cost
                 latencies.append(observed_latency)
+                cluster_metric["latencies"].append(observed_latency)
                 selected_tools[name] += 1
                 remaining_budget = max(0.0, remaining_budget - observed_cost)
                 excluded.append(name)
                 if passed:
                     successes += 1
+                    cluster_metric["successes"] += 1
                     break
                 context = (
                     query + "\nPREVIOUS_ATTEMPT:\nTool: " + name
@@ -622,6 +655,7 @@ def main() -> int:
             record = {
                 "position": args.offset + position - 1,
                 "query_id": row["query_id"],
+                "cluster_id": row.get("cluster_id"),
                 "query": query,
                 "passed": passed,
                 "attempts": attempts,
@@ -629,16 +663,34 @@ def main() -> int:
             }
             output_file.write(json.dumps(record, ensure_ascii=False) + "\n")
             output_file.flush()
+            elapsed = time.monotonic() - benchmark_started
+            eta = elapsed / position * (len(selected_rows) - position) if position else 0.0
             print(
-                "      [{}/{}] query_id={} passed={} attempts={} cost={:.6f}".format(
+                "      [{}/{}] query_id={} passed={} attempts={} cost={:.6f} elapsed={:.1f}m eta={:.1f}m".format(
                     position, len(selected_rows), row["query_id"], passed,
                     len(attempts), sum(item["observed_cost"] for item in attempts),
+                    elapsed / 60.0, eta / 60.0,
                 ),
                 flush=True,
             )
 
     print("[4/5] Calculating metrics ...", flush=True)
     count = len(selected_rows)
+    per_cluster = {}
+    for cluster_id, metric in sorted(cluster_metrics.items(), key=lambda item: item[0]):
+        cluster_count = int(metric["queries"])
+        cluster_latencies = list(metric["latencies"])
+        per_cluster[cluster_id] = {
+            "queries": cluster_count,
+            "successes": metric["successes"],
+            "success_rate": metric["successes"] / cluster_count if cluster_count else None,
+            "attempts": metric["attempts"],
+            "mean_attempts": metric["attempts"] / cluster_count if cluster_count else None,
+            "total_cost": metric["total_cost"],
+            "mean_cost": metric["total_cost"] / cluster_count if cluster_count else None,
+            "mean_latency": statistics.mean(cluster_latencies) if cluster_latencies else None,
+            "p95_latency": percentile(cluster_latencies, 0.95),
+        }
     summary = {
         "benchmark": "biasbusters_toolbandit_online",
         "dataset": str(args.dataset.resolve()),
@@ -672,6 +724,7 @@ def main() -> int:
         "queries_without_candidate": no_candidate,
         "judge_failures": judge_failures,
         "most_selected_tools": selected_tools.most_common(20),
+        "per_cluster": per_cluster,
         "request_budget": args.request_budget,
         "latency_sla": args.latency_sla,
         "max_attempts": args.max_attempts,

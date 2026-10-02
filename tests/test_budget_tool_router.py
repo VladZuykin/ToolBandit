@@ -2,6 +2,8 @@ import unittest
 
 import numpy as np
 
+from budget_tool_router.router import _DiagonalLinUCB, _DisjointLinUCB
+
 from budget_tool_router import (
     BudgetAwareToolRouter,
     NoFeasibleToolError,
@@ -111,6 +113,48 @@ class BudgetAwareToolRouterTests(unittest.TestCase):
         expected_penalty += 0.15 * (1.2 / 3.0)
         self.assertAlmostEqual(decision.score, decision.pass_ucb - expected_penalty)
 
+    def test_lqm_score_matches_latency_quality_formula(self) -> None:
+        router = BudgetAwareToolRouter(
+            [ToolSpec("tool", 0.0, 2.0, fixed_cost=0.0, prior_count=1)],
+            context_dimension=4, alpha=0.4, diagonal_covariance=True,
+            cost_weight=0.5, latency_weight=0.5,
+            lqm_latency_reference=4.0, lqm_deflation=2.0,
+        )
+        decision = router.select(
+            np.array([1.0, 0.0, 0.0, 0.0]),
+            remaining_budget=1.0,
+            latency_sla=5.0,
+        )
+        expected = (
+            decision.pass_mean / (1.0 + decision.latency_ucb / 4.0)
+            + 0.4 * decision.pass_uncertainty
+        )
+        self.assertAlmostEqual(decision.lqm_score, expected)
+
+    def test_lqm_deflates_exploration_for_quality_dominated_arm(self) -> None:
+        router = BudgetAwareToolRouter(
+            [
+                ToolSpec("strong", 0.0, 1.0, fixed_cost=0.0, prior_count=1),
+                ToolSpec("weak", 0.0, 1.0, fixed_cost=0.0, prior_count=1),
+            ],
+            context_dimension=4, alpha=0.5, diagonal_covariance=True,
+            cost_weight=0.5, latency_weight=0.5,
+            lqm_latency_reference=2.0, lqm_deflation=4.0,
+        )
+        x = np.array([1.0, 0.0, 0.0, 0.0])
+        for _ in range(20):
+            router.observe_reward("strong", x, passed=True)
+            router.observe_reward("weak", x, passed=False)
+        decisions = {item.tool_name: item for item in router.rank(x, remaining_budget=1.0)}
+        strong, weak = decisions["strong"], decisions["weak"]
+        undeflated_weak = (
+            weak.pass_mean / (1.0 + weak.latency_ucb / 2.0)
+            + 0.5 * weak.pass_uncertainty
+        )
+        self.assertGreater(strong.pass_mean, weak.pass_mean)
+        self.assertLess(weak.lqm_score, undeflated_weak)
+        self.assertGreater(strong.lqm_score, weak.lqm_score)
+
     def test_resources_use_separate_exponential_moving_averages(self) -> None:
         router = BudgetAwareToolRouter(
             [ToolSpec("tool", 10.0, 10.0, prior_count=1)],
@@ -219,6 +263,28 @@ class BudgetAwareToolRouterTests(unittest.TestCase):
                 call_tool=lambda name: ToolCallResult(False, 1.0, 0.2),
                 context_updater=lambda current, attempt: np.ones(12),
             )
+
+    def test_diagonal_discount_keeps_ridge_in_unobserved_direction(self) -> None:
+        model = _DiagonalLinUCB(dimension=2, regularization=1.0, discount=0.99)
+        observed = np.array([1.0, 0.0])
+        unobserved = np.array([0.0, 1.0])
+        for _ in range(2_000):
+            model.update(observed, 1.0)
+
+        self.assertAlmostEqual(model.a_diag[1], 1.0)
+        _, uncertainty, _ = model.estimate(unobserved, alpha=0.35)
+        self.assertAlmostEqual(uncertainty, 1.0)
+
+    def test_full_discount_keeps_ridge_in_unobserved_direction(self) -> None:
+        model = _DisjointLinUCB(dimension=2, regularization=1.0, discount=0.99)
+        observed = np.array([1.0, 0.0])
+        unobserved = np.array([0.0, 1.0])
+        for _ in range(200):
+            model.update(observed, 1.0)
+
+        self.assertAlmostEqual(model.a_matrix[1, 1], 1.0)
+        _, uncertainty, _ = model.estimate(unobserved, alpha=0.35)
+        self.assertAlmostEqual(uncertainty, 1.0)
 
 
 if __name__ == "__main__":

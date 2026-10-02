@@ -11,12 +11,13 @@ from typing import Any
 ORDER = {
     "agentic": 0,
     "ucb-top1": 1,
-    "semantic": 2,
-    "random": 3,
-    "cheapest": 4,
-    "fastest": 5,
-    "highest-pass-rate": 6,
-    "oracle-utility": 7,
+    "lqm-context-route": 2,
+    "semantic": 3,
+    "random": 4,
+    "cheapest": 5,
+    "fastest": 6,
+    "highest-pass-rate": 7,
+    "oracle-utility": 8,
 }
 
 
